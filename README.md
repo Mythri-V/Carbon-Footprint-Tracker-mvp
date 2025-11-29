@@ -26,4 +26,7 @@ Dashboard (metrics, charts, tables)
 Hotspot Detection
 AI-assisted Suggestions
 JSON Export
-Optional Map View
+
+
+Output: https://drive.google.com/drive/folders/1zU440KWSsF_sviUlIINzwGne779ks4BT?usp=drive_link
+
