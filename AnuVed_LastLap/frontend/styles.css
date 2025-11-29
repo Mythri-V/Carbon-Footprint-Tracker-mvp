@@ -1,0 +1,148 @@
+:root{
+  --bg:#f7f8fb;
+  --card:#ffffff;
+  --muted:#6b7280;
+  --accent:#1565c0;
+  --accent-2:#ff7a59;
+  --accent-3:#10b981;
+  --shadow: 0 8px 30px rgba(18,24,40,0.06);
+  --radius:12px;
+  --card-padding:18px;
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+}
+
+/* Reset */
+* { box-sizing: border-box; }
+html,body { height:100%; }
+body{
+  margin:0;
+  background:linear-gradient(180deg,#f9fafb 0%, #f3f5f8 100%);
+  color:#0f172a;
+  -webkit-font-smoothing:antialiased;
+  -moz-osx-font-smoothing:grayscale;
+  min-height:100vh;
+  display:flex;
+  flex-direction:column;
+}
+
+/* Topbar */
+.topbar{
+  padding:22px 28px;
+  border-bottom:1px solid rgba(15,23,42,0.04);
+  background:transparent;
+}
+.topbar h1{margin:0;font-size:20px;font-weight:700}
+.topbar .subtitle{margin:6px 0 0;color:var(--muted);font-size:13px}
+
+/* Layout */
+.container{
+  display:flex;
+  gap:22px;
+  padding:28px;
+  width:100%;
+  max-width:1400px;
+  margin:18px auto;
+}
+.left{flex:0 0 320px; display:flex; flex-direction:column; gap:12px;}
+.right{flex:1; min-width:700px; display:flex; flex-direction:column; gap:14px;}
+
+/* Side nav */
+.side-nav { background: var(--card); padding: 10px; border-radius: 12px; box-shadow: var(--shadow); }
+.side-nav ul { list-style: none; margin: 0; padding: 8px; display:flex; flex-direction:column; gap:8px; }
+.side-nav .nav-link {
+  display:block; text-align:left; padding:10px 12px; border-radius: 10px; cursor: pointer;
+  color: #0f172a; font-weight:700; border:1px solid transparent; background:transparent;
+}
+.side-nav .nav-link.active { background: linear-gradient(90deg, rgba(21,101,192,0.06), rgba(255,122,89,0.03)); border-color: rgba(15,23,42,0.03); color:var(--accent); box-shadow:0 6px 18px rgba(16,24,40,0.03);}
+
+/* Upload */
+.upload-box{
+  background:var(--card);
+  padding:var(--card-padding);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+  display:flex;flex-direction:column;gap:8px;align-items:center;text-align:center;border:1px dashed #e9eef6;
+  min-height:84px;
+}
+.upload-box input[type="file"]{ position:absolute; inset:0; opacity:0; cursor:pointer; }
+.drop-hint{color:var(--muted); font-size:13px}
+.file-name{font-size:13px;color:#0f172a;opacity:0.9}
+
+/* Controls */
+.controls{
+  background:var(--card);
+  padding:14px;
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+.controls label{display:block;font-size:13px;color:var(--muted);margin-bottom:6px}
+.controls select{width:100%;padding:10px;border-radius:8px;border:1px solid #eef2f7;background:#fff;font-size:14px}
+
+.control-row{display:flex;gap:8px;margin-top:12px}
+.btn{padding:10px 14px;border-radius:10px;border:1px solid #e6eef7;background:#fff;cursor:pointer;font-weight:600}
+.btn.small{padding:6px 10px;font-size:13px}
+.btn.primary{background:var(--accent);color:#fff;border:none;box-shadow:0 8px 20px rgba(37,99,235,0.12)}
+.btn:disabled{opacity:0.5;cursor:not-allowed}
+.checkbox{display:flex;align-items:center;gap:8px;margin-top:12px;font-size:13px;color:var(--muted)}
+.messages{margin-top:12px;font-size:13px;color:var(--muted)}
+
+/* KPIs */
+.metrics{ display:flex; gap:14px; margin-bottom:6px; }
+.metric{
+  background:var(--card);
+  padding:16px;
+  border-radius:12px;
+  flex:1;
+  box-shadow:var(--shadow);
+  text-align:center;
+  min-width:120px;
+}
+.mval{font-weight:800;font-size:20px; font-variant-numeric: tabular-nums; color:#071133}
+.mlabel{font-size:13px;color:var(--muted);margin-top:6px}
+
+/* Cards and charts */
+.card { background:var(--card); border-radius:12px; padding:14px; box-shadow:var(--shadow); }
+.chart-card{padding:18px;border-radius:12px;box-shadow:var(--shadow);flex:1;min-width:260px}
+.chart-card .card-header h3{margin:0;font-size:20px}
+.charts-grid { display:grid; grid-template-columns: 1.9fr 1fr; gap: 20px; align-items:start; }
+
+/* canvas */
+#stageChart { width:100% !important; height:480px !important; display:block; }
+#scopeChart { width:100% !important; height:420px !important; display:block; }
+#hotspotMiniChart { width:100% !important; height:260px !important; display:block; }
+
+/* Hotspot */
+.hotspot-card{border-radius:12px;box-shadow:var(--shadow);overflow:hidden}
+.hotspot-card .card-header{padding:14px 16px;border-bottom:1px solid #f1f5f9;background:linear-gradient(90deg, rgba(255,255,255,0.6), rgba(250,250,252,0.6))}
+.hotspot-card .card-body{padding:18px}
+
+.hs-donut { width:150px; height:150px; border-radius:50%; display:grid; place-items:center; background: conic-gradient(var(--accent) 0deg, #e6eef7 0deg); box-shadow: 0 12px 30px rgba(12,20,40,0.04); position: relative; }
+.hs-donut::after { content:""; width:118px; height:118px; border-radius:50%; background:#fff; position:absolute; z-index:1; box-shadow: 0 6px 18px rgba(10,20,40,0.04); }
+.hs-donut-center { position:relative; z-index:2; text-align:center; }
+.metric { padding:12px; background:#fbfbfd; border-radius:8px; border:1px solid #f0f3f7; }
+.metric-label{font-size:12px;color:var(--muted)}
+.metric-value{font-weight:700;font-size:16px;margin-top:6px;color:#0f172a}
+
+/* hotspot suggestion */
+.hotspot-suggestion { padding:12px; background:#fff9f3; border:1px solid #ffedd5; color:#92400e; border-radius:8px; font-size:13px }
+
+/* preset table */
+.sens { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 12px; table-layout: fixed; }
+.sens th, .sens td { padding: 8px 10px; border-bottom: 1px solid #e5e7eb; text-align: right; font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sens th:first-child, .sens td:first-child { text-align: left; width: 160px; font-weight: 600; }
+
+/* footer */
+.footer{padding:12px 20px;color:var(--muted);font-size:13px;text-align:center;margin-top:auto;border-top:1px solid #eef2f7}
+
+/* responsive */
+@media (max-width: 1200px) {
+  .container{ padding:16px; max-width:1000px; }
+  .charts-grid { grid-template-columns: 1fr; }
+  #stageChart { height:360px !important; }
+  #scopeChart { height:320px !important; }
+}
+@media (max-width: 900px) {
+  .left{flex:0 0 100%;}
+  .right{min-width:0;}
+  #hotspotMiniChart { height:180px !important; }
+}
