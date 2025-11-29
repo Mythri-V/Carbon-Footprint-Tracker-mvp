@@ -1,622 +1,335 @@
-// frontend/script.js
-// Full frontend logic for Supply Chain CO2 Dashboard
-// - file upload (drag/drop + file picker)
-// - POST to /api/compute (FormData)
-// - renders Stage, Scope and Hotspot charts with Chart.js
-// - DPR canvas fix, chart value plugin, modal export
-// Replace entire file with this content.
+/* frontend/script.js — hotspot component breakdown + suggestions + top-hotspots
+   NOTE: explicit canvas.height and style.height set to avoid infinite document height.
+*/
 
-//
-// === GLOBAL STATE & DOM REFS ===
-//
-let selectedFile = null;
-let lastResult = null;
+function $id(id){ return document.getElementById(id); }
+function fmt(n){ return (typeof n === 'number' ? Number(n.toFixed(2)) : n); }
+function safeNumber(x){ const n = Number(String(x || '').replace(/[^0-9.\-eE]/g,'')); return isNaN(n) ? 0 : n; }
 
-const uploadBox = document.getElementById('uploadBox');
-const fileInput = document.getElementById('fileInput');
-const pickFileBtn = document.getElementById('pickFileBtn');
-const fileNameEl = document.getElementById('fileName');
+const MATERIAL_FACTORS_FRONT = { metal:6.0, plastic:3.0, textile:4.0, glass:1.8, food:2.5, paper:1.5, other:1.0 };
+const GRID_KGCO2_PER_KWH = 0.233;
 
-const computeBtn = document.getElementById('computeBtn');
-const downloadBtn = document.getElementById('downloadBtn');
-const presetSelect = document.getElementById('presetSelect');
-const messages = document.getElementById('messages');
-const sensitivityToggle = document.getElementById('sensitivityToggle');
-const sensitivityPanel = document.getElementById('sensitivityPanel');
-const sensitivityTable = document.getElementById('sensitivityTable');
+let RAW_ROWS = [];
+let RESULTS = { total:0, scopes:{s1:0,s2:0,s3:0}, stageTotals:{}, hotspots:[], details:[] };
 
-const totalVal = document.getElementById('totalVal');
-const scope1Val = document.getElementById('scope1Val');
-const scope2Val = document.getElementById('scope2Val');
-const scope3Val = document.getElementById('scope3Val');
-
-const stageCanvas = document.getElementById('stageChart');
-const scopeCanvas = document.getElementById('scopeChart');
-const hotspotCanvas = document.getElementById('hotspotMiniChart');
-
-const hsMode = document.getElementById('hsMode');
-const hsStage = document.getElementById('hsStage');
-const hsDistance = document.getElementById('hsDistance');
-const hsWeight = document.getElementById('hsWeight');
-const hsMaterial = document.getElementById('hsMaterial');
-const hsEnergy = document.getElementById('hsEnergy');
-const hsBreak = document.getElementById('hotspotBreakdown');
-const hsSuggest = document.getElementById('hotspotSuggestion');
-const hsViewRowBtn = document.getElementById('hsViewRowBtn');
-const hsDownloadBtn = document.getElementById('hsDownloadBtn');
-
-const chartModal = document.getElementById('chartModal');
-const modalCanvas = document.getElementById('modalCanvas');
-const modalTitle = document.getElementById('modalTitle');
-const modalClose = document.getElementById('modalClose');
-const exportPNG = document.getElementById('exportPNG');
-
-let stageChart = null;
-let scopeChart = null;
-let hotspotMiniChart = null;
-
-//
-// === HELPERS ===
-//
-function numberFormat(x) {
-  const n = Number(x || 0);
-  if (Math.abs(n) >= 1000) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-  return (Math.round(n * 100) / 100).toLocaleString();
-}
-function escapeHtml(s = '') {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-}
-
-// Ensures canvas pixel density matches devicePixelRatio for crisp charts
-function fixCanvasForDPR(canvas) {
-  const dpr = window.devicePixelRatio || 1;
-  const rect = canvas.getBoundingClientRect();
-  const width = Math.max(1, Math.round(rect.width * dpr));
-  const height = Math.max(1, Math.round(rect.height * dpr));
-  if (canvas.width !== width || canvas.height !== height) {
-    canvas.width = width;
-    canvas.height = height;
-  }
-  const ctx = canvas.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  return ctx;
-}
-
-//
-// === Chart plugin: value labels (small, safe) ===
-//
-const BarValuePlugin = {
-  id: 'barValuePlugin',
-  afterDatasetsDraw(chart, args, options) {
-    const { ctx, chartArea } = chart;
-    ctx.save();
-    chart.data.datasets.forEach((dataset, dsIndex) => {
-      const meta = chart.getDatasetMeta(dsIndex);
-      meta.data.forEach((bar, index) => {
-        const value = dataset.data[index];
-        if (value == null) return;
-        const text = (typeof options.format === 'function') ? options.format(value) : String(value);
-        ctx.font = `${options.fontSize || 12}px Inter, system-ui, Arial`;
-        ctx.textBaseline = 'middle';
-        const textWidth = ctx.measureText(text).width;
-        const buffer = 8;
-        const canvasRight = chartArea.right;
-        // place outside if enough room, otherwise inside left of bar end
-        if (bar.x + buffer + textWidth < canvasRight) {
-          ctx.fillStyle = options.color || '#0f172a';
-          ctx.textAlign = 'left';
-          ctx.fillText(text, bar.x + buffer, bar.y);
-        } else {
-          ctx.fillStyle = options.insideColor || '#fff';
-          ctx.textAlign = 'right';
-          ctx.fillText(text, bar.x - 10, bar.y);
-        }
-      });
-    });
-    ctx.restore();
-  }
-};
-Chart.register(BarValuePlugin);
-
-//
-// === FILE UPLOAD HANDLERS ===
-//
-if (uploadBox) {
-  uploadBox.addEventListener('click', () => fileInput && fileInput.click());
-  uploadBox.addEventListener('dragover', (e) => { e.preventDefault(); uploadBox.classList.add('drag'); });
-  uploadBox.addEventListener('dragleave', () => uploadBox.classList.remove('drag'));
-  uploadBox.addEventListener('drop', (e) => {
-    e.preventDefault();
-    uploadBox.classList.remove('drag');
-    const f = e.dataTransfer.files && e.dataTransfer.files[0];
-    if (f) handleFileSelect(f);
-  });
-}
-if (pickFileBtn) pickFileBtn.addEventListener('click', () => fileInput && fileInput.click());
-if (fileInput) fileInput.addEventListener('change', (e) => handleFileSelect(e.target.files && e.target.files[0]));
-
-function handleFileSelect(file) {
-  if (!file) return;
-  selectedFile = file;
-  if (fileNameEl) fileNameEl.textContent = `${file.name} • ${Math.round(file.size/1024)} KB`;
-  if (messages) messages.textContent = '';
-  if (downloadBtn) downloadBtn.disabled = true;
-  lastResult = null;
-}
-
-//
-// === NETWORK: POST to backend ===
-//
-async function postCompute(form) {
-  // expects backend route /api/compute (flask); returns json or CSV blob when download flag used
-  const resp = await fetch('/api/compute', { method: 'POST', body: form });
-  if (!resp.ok) {
-    const txt = await resp.text().catch(()=>`HTTP ${resp.status}`);
-    throw new Error(txt || `Server ${resp.status}`);
-  }
-  const ct = resp.headers.get('Content-Type') || '';
-  if (ct.includes('application/json')) {
-    return resp.json();
-  }
-  // fallback - CSV blob
-  return resp.blob();
-}
-
-//
-// === COMPUTE & DOWNLOAD HANDLERS ===
-//
-if (computeBtn) {
-  computeBtn.addEventListener('click', async () => {
-    if (!selectedFile) { if (messages) messages.textContent = 'Please select a CSV file first.'; return; }
-    computeBtn.disabled = true;
-    messages && (messages.textContent = 'Uploading & computing...');
-    const form = new FormData();
-    form.append('file', selectedFile);
-    form.append('preset', presetSelect ? presetSelect.value : 'baseline');
-    form.append('compare_all', sensitivityToggle && sensitivityToggle.checked ? '1' : '0');
-
-    try {
-      const res = await postCompute(form);
-      if (res instanceof Blob) {
-        // server returned a file (download)
-        const url = URL.createObjectURL(res);
-        const a = document.createElement('a'); a.href = url; a.download = 'emissions_results.csv'; document.body.appendChild(a); a.click(); a.remove();
-        URL.revokeObjectURL(url);
-        messages && (messages.textContent = 'Download started.');
-      } else {
-        handleResultJSON(res);
-      }
-    } catch (err) {
-      console.error(err);
-      messages && (messages.textContent = `Error: ${err.message}`);
-    } finally {
-      computeBtn.disabled = false;
-    }
+function parseCSV(text){
+  if(!text) return [];
+  text = text.replace(/\r\n/g,'\n').trim();
+  const lines = text.split('\n').filter(l => l.trim().length>0);
+  if(lines.length === 0) return [];
+  const header = lines.shift();
+  const cols = header.split(',').map(c => c.trim().replace(/^"|"$/g,'').toLowerCase());
+  return lines.map(line=>{
+    const cells = []; let cur = '', inQ = false;
+    for(let i=0;i<line.length;i++){ const ch = line[i]; if(ch === '"'){ inQ = !inQ; continue; } if(ch === ',' && !inQ){ cells.push(cur); cur=''; continue; } cur+=ch; }
+    cells.push(cur);
+    const obj = {}; for(let i=0;i<cols.length;i++) obj[cols[i]] = (cells[i] ?? '').trim();
+    return obj;
   });
 }
 
-if (downloadBtn) {
-  downloadBtn.addEventListener('click', async () => {
-    if (!selectedFile) { messages && (messages.textContent = 'Upload and compute first.'); return; }
-    downloadBtn.disabled = true;
-    messages && (messages.textContent = 'Preparing download...');
-    const form = new FormData();
-    form.append('file', selectedFile);
-    form.append('preset', presetSelect ? presetSelect.value : 'baseline');
-    form.append('compare_all', sensitivityToggle && sensitivityToggle.checked ? '1' : '0');
-    form.append('download', '1');
+/* ---------- Ensure hotspot DOM + explicit canvas sizing ---------- */
+function ensureHotspotDOM(){
+  let hot = $id('hotspotBreakdown');
+  if(!hot){
+    const hotspotCard = $id('hotspotContainer') || document.querySelector('.hotspot-card');
+    hot = document.createElement("div"); hot.id = "hotspotBreakdown";
+    (hotspotCard || document.body).appendChild(hot);
+  }
 
-    try {
-      const resp = await fetch('/api/compute', { method: 'POST', body: form });
-      if (!resp.ok) throw new Error(`Server ${resp.status}`);
-      const blob = await resp.blob();
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a'); a.href = url; a.download = 'emissions_results.csv'; document.body.appendChild(a); a.click(); a.remove();
-      URL.revokeObjectURL(url);
-      messages && (messages.textContent = 'Download started.');
-    } catch (err) {
-      console.error(err);
-      messages && (messages.textContent = `Download error: ${err.message}`);
-    } finally {
-      downloadBtn.disabled = false;
-    }
-  });
+  if(!$id('hotspotListInner')){
+    const list = document.createElement('div'); list.id = 'hotspotListInner'; list.className = 'hotspot-list';
+    hot.appendChild(list);
+  }
+
+  // create componentChart canvas if not present and set explicit pixel height
+  if(!$id('componentChart')){
+    const wrap = document.createElement('div'); wrap.className = 'component-chart-wrap';
+    wrap.style.marginTop = '8px';
+    const title = document.createElement('div'); title.style.fontWeight = 600; title.style.marginBottom = '6px'; title.textContent = 'Component breakdown';
+    const canvas = document.createElement('canvas'); canvas.id = 'componentChart';
+    // explicit pixel sizing prevents Chart.js from expanding document height
+    canvas.width = 600;
+    canvas.height = 260;
+    canvas.style.width = '100%';
+    canvas.style.height = '260px';
+    wrap.appendChild(title); wrap.appendChild(canvas);
+    hot.appendChild(wrap);
+  }
+
+  if(!$id('hotspotSuggestionList')){
+    const s = document.createElement('div'); s.id = 'hotspotSuggestionList'; s.style.marginTop='10px';
+    $id('hotspotContainer').querySelector('.card-body').appendChild(s);
+  }
 }
 
-//
-// === PROCESS SERVER JSON RESULT ===
-// expected shape (example):
-// {
-//   total_kgCO2: 12345,
-//   scope: { scope1: X, scope2: Y, scope3: Z },
-//   stage_breakdown: [{stage:"supplier_to_factory", kg: 1000}, ...],
-//   hotspot: { ... row object ...},
-//   suggestion: "..."
-//
-// }
-function handleResultJSON(data) {
-  lastResult = data;
-  const scope1 = Number((data.scope && data.scope.scope1) || 0);
-  const scope2 = Number((data.scope && data.scope.scope2) || 0);
-  const scope3 = Number((data.scope && data.scope.scope3) || 0);
+/* ---------- Wiring + others (unchanged majority) ---------- */
+document.addEventListener("DOMContentLoaded", () => {
+  const uploadBox = $id("uploadBox");
+  const fileInput = $id("fileInput");
+  const fileName = $id("fileName");
+  const pickFileBtn = $id("pickFileBtn");
 
-  if (totalVal) totalVal.innerText = numberFormat(data.total_kgCO2 || 0);
-  if (scope1Val) scope1Val.innerText = numberFormat(scope1);
-  if (scope2Val) scope2Val.innerText = numberFormat(scope2);
-  if (scope3Val) scope3Val.innerText = numberFormat(scope3);
-
-  const stages = (data.stage_breakdown || []).slice(0, 10);
-  const labels = stages.map(s => s.stage || s[0]);
-  const values = stages.map(s => Number(s.kg || s.value || 0));
-  renderStageChart(labels, values);
-
-  renderScopeBarChart(['Scope1','Scope2','Scope3'], [scope1, scope2, scope3]);
-
-  if (data.hotspot) renderHotspot(data.hotspot, data.suggestion || '');
-
-  if (data.sensitivity && Array.isArray(data.sensitivity) && data.sensitivity.length) {
-    sensitivityPanel && (sensitivityPanel.hidden = false);
-    renderSensitivity(data.sensitivity);
-  } else {
-    sensitivityPanel && (sensitivityPanel.hidden = true);
-    if (sensitivityTable) sensitivityTable.innerText = 'No sensitivity data.';
-  }
-
-  if (downloadBtn) downloadBtn.disabled = false;
-  messages && (messages.textContent = 'Computation done.');
-}
-
-//
-// === STAGE CHART (full replace) ===
-//
-function renderStageChart(labels, values) {
-  if (!stageCanvas) return;
-  const ctx = fixCanvasForDPR(stageCanvas);
-  if (stageChart) stageChart.destroy();
-
-  const nums = values.map(v => Number(v || 0));
-  const total = nums.reduce((a,b)=>a+b,0) || 1;
-  const maxVal = Math.max(...nums,1);
-  const suggestedMax = Math.ceil(maxVal * 1.12);
-
-  // gradient
-  const grad = ctx.createLinearGradient(0,0,stageCanvas.getBoundingClientRect().width,0);
-  grad.addColorStop(0, '#60a5fa');
-  grad.addColorStop(1, '#2563eb');
-
-  stageChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        data: nums,
-        backgroundColor: grad,
-        borderRadius: 20,
-        barThickness: 36,
-        maxBarThickness: 60
-      }]
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: (ctx) => `${numberFormat(ctx.parsed.x)} kg — ${((ctx.parsed.x/total)*100).toFixed(2)}%`
-          }
-        },
-        barValuePlugin: {
-          color: '#fff',
-          insideColor: '#fff',
-          fontSize: 13,
-          format: (v) => {
-            const pct = ((v/total)*100).toFixed(2);
-            return `${numberFormat(v)} kg — ${pct}%`;
-          }
-        }
-      },
-      layout: { padding: { left: 18, right: 24, top: 10, bottom: 10 } },
-      scales: {
-        x: {
-          beginAtZero: true,
-          suggestedMax: suggestedMax,
-          grid: { color: '#f1f5f9' },
-          ticks: { callback: v => Number(v).toLocaleString(), font: { size: 13 }, color: '#6b7280' }
-        },
-        y: {
-          grid: { display: false },
-          ticks: { font: { size: 15 }, color: '#111827', padding: 8 }
-        }
-      }
-    }
-  });
-
-  stageCanvas.style.cursor = 'zoom-in';
-  stageCanvas.onclick = () => openModal(stageCanvas, 'Stage breakdown (expanded)');
-}
-
-//
-// === SCOPE CHART (full replace) ===
-//
-function renderScopeBarChart(labels, values) {
-  if (!scopeCanvas) return;
-  const ctx = fixCanvasForDPR(scopeCanvas);
-  if (scopeChart) scopeChart.destroy();
-
-  const nums = values.map(v => Number(v || 0));
-  const total = nums.reduce((a,b)=>a+b,0) || 1;
-  const maxVal = Math.max(...nums,1);
-  const suggestedMax = Math.ceil(maxVal * 1.12);
-
-  const colors = ['#2563eb','#fb7185','#fb923c'];
-
-  scopeChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-      labels,
-      datasets: [{
-        data: nums,
-        backgroundColor: colors,
-        borderRadius: 16,
-        barThickness: 40,
-        maxBarThickness: 54
-      }]
-    },
-    options: {
-      indexAxis: 'y',
-      responsive: true,
-      maintainAspectRatio: false,
-      plugins: {
-        legend: { display: false },
-        tooltip: {
-          callbacks: {
-            label: function(context) {
-              const v = Number(context.parsed.x || 0);
-              const pct = total > 0 ? ((v/total)*100).toFixed(2) : '0.00';
-              return `${numberFormat(v)} kg — ${pct}%`;
-            }
-          }
-        },
-        barValuePlugin: {
-          color: '#0f172a',
-          insideColor: '#fff',
-          fontSize: 13,
-          format: (v) => {
-            const pct = total > 0 ? ((v/total)*100) : 0;
-            return `${numberFormat(v)} kg — ${pct.toFixed(2)}%`;
-          }
-        }
-      },
-      layout: { padding: { left: 12, right: 18, top: 6, bottom: 6 } },
-      scales: {
-        x: {
-          beginAtZero: true,
-          suggestedMax: suggestedMax,
-          grid: { color: '#f1f5f9' },
-          ticks: { callback: v => Number(v).toLocaleString(), font: { size: 13 }, color: '#6b7280' }
-        },
-        y: {
-          grid: { display: false },
-          ticks: { font: { size: 14 }, color: '#111827', padding: 8 }
-        }
-      }
-    }
-  });
-
-  scopeCanvas.style.cursor = 'zoom-in';
-  scopeCanvas.onclick = () => openModal(scopeCanvas, 'Scope breakdown (expanded)');
-
-  // update textual summary
-  let summaryEl = document.getElementById('scopeSummary');
-  if (!summaryEl) {
-    summaryEl = document.createElement('div');
-    summaryEl.id = 'scopeSummary';
-    summaryEl.style.marginTop = '10px';
-    summaryEl.style.fontSize = '13px';
-    scopeCanvas.parentElement.appendChild(summaryEl);
-  }
-  let html = '<strong>Scope summary:</strong><br/>';
-  for (let i=0;i<labels.length;i++){
-    const pct = ((nums[i]/total)*100).toFixed(2);
-    html += `<div style="margin:8px 0;display:flex;align-items:center;">
-      <span style="display:inline-block;width:14px;height:14px;background:${colors[i]};margin-right:10px;border-radius:4px;"></span>
-      <div><strong>${labels[i]}</strong>: ${numberFormat(nums[i])} kg — <span style="color:#111827">${pct}%</span></div>
-    </div>`;
-  }
-  summaryEl.innerHTML = html;
-}
-
-//
-// === HOTSPOT RENDER ===
-//
-function renderHotspot(hotspotObj, suggestionText) {
-  if (!hsMode || !hsStage || !hsDistance || !hsWeight || !hsMaterial || !hsEnergy || !hsBreak || !hsSuggest) return;
-
-  if (!hotspotObj) {
-    hsMode.innerText = '—'; hsStage.innerText = '—'; hsDistance.innerText = '—'; hsWeight.innerText = '—';
-    hsMaterial.innerText = '—'; hsEnergy.innerText = '—'; hsBreak.innerHTML = ''; hsSuggest.innerText = 'Suggestion: —';
-    const pctEl = document.getElementById('hsContributionPct'); if (pctEl) pctEl.innerText = '—';
-    const rowTotalEl = document.getElementById('hsRowTotal'); if (rowTotalEl) rowTotalEl.innerText = '—';
-    if (hotspotMiniChart) { hotspotMiniChart.destroy(); hotspotMiniChart = null; }
-    const donut = document.getElementById('hsContribution'); if (donut) donut.style.background = 'conic-gradient(var(--accent) 0deg, #eef2f7 0deg)';
-    return;
-  }
-
-  hsMode.innerText = hotspotObj.mode || '—';
-  hsStage.innerText = hotspotObj.stage || '—';
-  hsDistance.innerText = numberFormat(hotspotObj.distance_km || 0);
-  hsWeight.innerText = numberFormat(hotspotObj.weight_kg || 0);
-  hsMaterial.innerText = hotspotObj.material_type || '—';
-  hsEnergy.innerText = numberFormat(hotspotObj.manufacturing_energy_kwh || 0);
-
-  const transport = Number(hotspotObj.transport_kgCO2 || 0);
-  const material = Number(hotspotObj.material_kgCO2 || 0);
-  const manufacturing = Number(hotspotObj.manufacturing_kgCO2 || 0);
-  const rowTotal = Number(hotspotObj.total_kgCO2 || (transport+material+manufacturing));
-  const totalAll = Number(lastResult && lastResult.total_kgCO2 ? lastResult.total_kgCO2 : 1);
-  const contributionPct = totalAll > 0 ? Math.min(100, (rowTotal / totalAll) * 100) : 0;
-
-  // donut visual update
-  const donut = document.getElementById('hsContribution');
-  if (donut) {
-    const angle = Math.round((contributionPct / 100) * 360);
-    let color = 'var(--accent)';
-    if (contributionPct > 60) color = 'var(--accent-2)';
-    donut.style.background = `conic-gradient(${color} 0deg ${angle}deg, #eef2f7 ${angle}deg 360deg)`;
-    const pctEl = document.getElementById('hsContributionPct');
-    if (pctEl) pctEl.innerText = `${Math.round(contributionPct)}%`;
-    const rowTotalEl = document.getElementById('hsRowTotal');
-    if (rowTotalEl) rowTotalEl.innerText = numberFormat(rowTotal) + ' kg';
-  }
-
-  // textual breakdown and suggestion
-  if (hsBreak) {
-    hsBreak.innerHTML = `<div><strong>Transport:</strong> ${numberFormat(transport)} kg</div>
-                         <div><strong>Material:</strong> ${numberFormat(material)} kg</div>
-                         <div><strong>Manufacturing:</strong> ${numberFormat(manufacturing)} kg</div>
-                         <div style="margin-top:6px"><strong>Total (row):</strong> ${numberFormat(rowTotal)} kg</div>`;
-  }
-  if (hsSuggest) hsSuggest.innerText = `Suggestion: ${suggestionText || 'No suggestion available.'}`;
-
-  // component chart
-  if (hotspotCanvas) {
-    const ctx = fixCanvasForDPR(hotspotCanvas);
-    if (hotspotMiniChart) hotspotMiniChart.destroy();
-    const labels = ['Transport','Material','Manufacturing'];
-    const dataVals = [transport, material, manufacturing];
-    const colors = ['#2563eb','#fb923c','#10b981'];
-    const maxVal = Math.max(...dataVals,1);
-    const suggestedMax = Math.ceil(maxVal * 1.12);
-
-    hotspotMiniChart = new Chart(ctx, {
-      type: 'bar',
-      data: { labels, datasets: [{ data: dataVals, backgroundColor: colors, borderRadius: 10, barThickness: 24, maxBarThickness: 40 }] },
-      options: {
-        indexAxis: 'y',
-        responsive: true,
-        maintainAspectRatio: false,
-        plugins: {
-          legend: { display: false },
-          tooltip: {
-            callbacks: {
-              label: function(context) {
-                const v = Number(context.parsed.x || 0);
-                const pct = rowTotal > 0 ? ((v/rowTotal)*100).toFixed(2) : '0.00';
-                return `${numberFormat(v)} kg — ${pct}% of row`;
-              }
-            }
-          },
-          barValuePlugin: { color: '#0f172a', insideColor: '#fff', fontSize: 13, format: v => numberFormat(v) + ' kg' }
-        },
-        scales: { x: { beginAtZero:true, suggestedMax: suggestedMax, ticks: { callback: v => Number(v).toLocaleString(), font: { size: 12 } }, grid: { color:'#f1f5f9' } }, y: { ticks: { font: { size: 13 }, padding: 8 }, grid: { display:false } } }
+  if(uploadBox && fileInput){
+    uploadBox.addEventListener("click", () => fileInput.click());
+    pickFileBtn?.addEventListener("click", (e) => { e.stopPropagation(); fileInput.click(); });
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length > 0) {
+        const f = fileInput.files[0];
+        if (fileName) fileName.textContent = `${f.name} • ${Math.round(f.size/1024)} KB`;
+        onFile({ target: { files: fileInput.files }});
       }
     });
+    uploadBox.addEventListener("dragover", (e)=>{ e.preventDefault(); uploadBox.style.background="#f1f5f9"; });
+    uploadBox.addEventListener("dragleave", ()=>{ uploadBox.style.background="white"; });
+    uploadBox.addEventListener("drop",(e)=>{ e.preventDefault(); uploadBox.style.background="white"; const f = e.dataTransfer.files[0]; if(f){ fileInput.files = e.dataTransfer.files; if (fileName) fileName.textContent = `${f.name} • ${Math.round(f.size/1024)} KB`; onFile({ target:{ files:e.dataTransfer.files }}); }});
   }
 
-  if (hsViewRowBtn) hsViewRowBtn.onclick = () => {
-    const preview = JSON.stringify(hotspotObj, (k,v) => (typeof v === 'number' ? Math.round(v*100)/100 : v), 2);
-    const win = window.open('', '_blank', 'width=700,height=500,scrollbars=yes');
-    if (win) { win.document.title = 'Hotspot row'; win.document.body.style.fontFamily = 'monospace'; const pre = win.document.createElement('pre'); pre.textContent = preview; win.document.body.appendChild(pre); }
-    else alert('Popup blocked — view details in console.');
-  };
+  if($id('computeBtn')) $id('computeBtn').addEventListener('click', computeEmissions);
+  if($id('downloadBtn')) $id('downloadBtn').addEventListener('click', downloadResults);
 
-  if (hsDownloadBtn) hsDownloadBtn.onclick = () => {
-    const keys = Object.keys(hotspotObj);
-    const vals = keys.map(k => `"${String(hotspotObj[k] ?? '').replace(/"/g, '""')}"`);
-    const csv = keys.join(',') + '\n' + vals.join(',');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a'); a.href = url; a.download = 'hotspot_row.csv'; document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
-  };
-
-  hotspotCanvas.style.cursor = 'zoom-in';
-  hotspotCanvas.onclick = () => openModal(hotspotCanvas, 'Hotspot components (expanded)');
-}
-
-//
-// === SENSITIVITY / PRESET TABLE ===
-//
-function renderSensitivity(arr) {
-  if (!sensitivityTable) return;
-  let html = '<table class="sens"><thead><tr><th>Preset</th><th>Total</th><th>Scope1</th><th>Scope2</th><th>Scope3</th></tr></thead><tbody>';
-  for (const r of arr) {
-    html += `<tr>
-      <td>${escapeHtml(r.preset || '')}</td>
-      <td>${numberFormat(r.total_kgCO2 || r.total || 0)}</td>
-      <td>${numberFormat(r.scope1_kgCO2 || r.scope1 || 0)}</td>
-      <td>${numberFormat(r.scope2_kgCO2 || r.scope2 || 0)}</td>
-      <td>${numberFormat(r.scope3_kgCO2 || r.scope3 || 0)}</td>
-    </tr>`;
-  }
-  html += '</tbody></table>';
-  sensitivityTable.innerHTML = html;
-}
-
-//
-// === SIDE NAV INTERACTIONS ===
-//
-(function setupSideNav(){
-  const nav = document.getElementById('sideNav');
-  if (!nav) return;
-  function getTargetElement(key){
-    if (!key) return document.documentElement;
-    if (key === 'top') return document.documentElement;
-    if (key === 'charts') return document.getElementById('charts') || document.querySelector('.charts-grid') || document.body;
-    return document.getElementById(key);
-  }
-  nav.querySelectorAll('.nav-link').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      const key = btn.getAttribute('data-target');
-      const el = getTargetElement(key);
-      if (!el) return;
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-      btn.focus({preventScroll:true});
-      nav.querySelectorAll('.nav-link').forEach(b=>b.classList.remove('active'));
-      btn.classList.add('active');
-    });
-  });
-})();
-
-//
-// === MODAL EXPAND & EXPORT ===
-//
-function openModal(sourceCanvas, title) {
-  if (!chartModal || !modalCanvas) return;
-  modalTitle.innerText = title || 'Chart';
-  chartModal.style.display = 'flex';
-  // draw snapshot of canvas into modalCanvas
-  try {
-    const url = sourceCanvas.toDataURL('image/png');
-    const ctx = modalCanvas.getContext('2d');
-    const img = new Image();
-    img.onload = () => {
-      const rect = modalCanvas.getBoundingClientRect();
-      modalCanvas.width = rect.width * (window.devicePixelRatio || 1);
-      modalCanvas.height = rect.height * (window.devicePixelRatio || 1);
-      ctx.setTransform(window.devicePixelRatio || 1,0,0,window.devicePixelRatio || 1,0,0);
-      ctx.clearRect(0,0,rect.width,rect.height);
-      ctx.drawImage(img, 0, 0, rect.width, rect.height);
-    };
-    img.src = url;
-  } catch (e) {
-    console.warn('Modal render failed', e);
-  }
-}
-if (modalClose) modalClose.addEventListener('click', () => chartModal.style.display = 'none');
-if (chartModal) chartModal.addEventListener('click', (e) => { if (e.target === chartModal) chartModal.style.display = 'none'; });
-if (exportPNG) exportPNG.addEventListener('click', () => {
-  if (!modalCanvas) return;
-  const url = modalCanvas.toDataURL('image/png');
-  const a = document.createElement('a'); a.href = url; a.download = (modalTitle.innerText || 'chart') + '.png'; document.body.appendChild(a); a.click(); a.remove();
+  ensureHotspotDOM();
+  try { renderStageChart([],[]); renderScopeChart([0,0,0]); renderHotspotMiniChart([0,0,0]); } catch(e){ console.warn(e); }
+  updateHotspotPanel(null);
 });
 
-//
-// === INITIALIZE EMPTY VISUALS ===
-//
-(function init() {
-  renderStageChart([], []);
-  renderScopeBarChart(['Scope1','Scope2','Scope3'], [0,0,0]);
-  renderHotspot(null, '');
+function onFile(e){
+  const f = e.target.files?.[0];
+  if(!f) return;
+  const reader = new FileReader();
+  reader.onload = (ev)=>{
+    RAW_ROWS = parseCSV(ev.target.result);
+    if($id('messages')) $id('messages').textContent = `Loaded ${RAW_ROWS.length} rows. Click Compute emissions.`;
+    if($id('downloadBtn')) $id('downloadBtn').disabled = true;
+  };
+  reader.readAsText(f);
+}
+
+function computeEmissions(){
+  if(RAW_ROWS.length===0){ if($id('messages')) $id('messages').textContent = "No CSV loaded."; return; }
+
+  RESULTS={ total:0, scopes:{s1:0,s2:0,s3:0}, stageTotals:{}, hotspots:[], details:[] };
+
+  RAW_ROWS.forEach((row, idx)=>{
+    const r = {}; for(const k in row) r[k.toLowerCase()] = (row[k] ?? '').toString().trim();
+    const stage = (r.stage || r['stage_name'] || 'unknown');
+    const mode = (r.mode || '').toLowerCase();
+    const dist = safeNumber(r.distance_km || r.distance || r.km || r['distance (km)'] || 0);
+    const weight = safeNumber(r.weight_kg || r.weight || r.qty || r.quantity || 0);
+    const tons = weight / 1000.0;
+
+    const TRANSPORT_FACTORS_G_TKM = { truck:62, road:62, rail:22, sea:15, ship:15, air:500, last_mile:90 };
+    const t_factor_g = TRANSPORT_FACTORS_G_TKM[mode] || 62;
+    const transport_kg = (dist * tons * t_factor_g) / 1000.0;
+
+    const material_type = (r.material_type || r.material || 'other').toLowerCase();
+    const mat_factor = MATERIAL_FACTORS_FRONT[material_type] || MATERIAL_FACTORS_FRONT['other'];
+    const material_kg = mat_factor * weight;
+
+    const energy_kwh = safeNumber(r.manufacturing_energy_kwh || r.manufacturing || r['manufacturing (kwh)'] || 0);
+    const manufacturing_kg = energy_kwh * GRID_KGCO2_PER_KWH;
+
+    const total = transport_kg + material_kg + manufacturing_kg;
+
+    RESULTS.total += total;
+    RESULTS.stageTotals[stage] = (RESULTS.stageTotals[stage] || 0) + total;
+
+    let scope1 = 0, scope2 = 0, scope3 = 0;
+    const owner = (r.ownership || '').toLowerCase();
+    if (['owned','company','company_owned','own'].includes(owner) || stage.toLowerCase().includes('owned') || stage.toLowerCase().includes('on_site')) {
+      scope1 = transport_kg;
+    } else if (mode === 'air') {
+      scope3 = transport_kg;
+    } else {
+      scope3 = transport_kg;
+    }
+    scope2 = manufacturing_kg;
+
+    RESULTS.scopes.s1 += scope1;
+    RESULTS.scopes.s2 += scope2;
+    RESULTS.scopes.s3 += scope3 + material_kg;
+
+    RESULTS.details.push({
+      index: idx,
+      total: total,
+      transport_kg: transport_kg,
+      material_kg: material_kg,
+      manufacturing_kg: manufacturing_kg,
+      stage: stage,
+      mode: mode,
+      distance_km: dist,
+      weight_kg: weight,
+      material_type: material_type,
+      ownership: owner,
+      raw: r
+    });
+  });
+
+  RESULTS.hotspots = RESULTS.details.slice().sort((a,b)=>b.total - a.total).slice(0,5);
+
+  populateUI();
+  if($id('messages')) $id('messages').textContent = "Computation complete.";
+  if($id('downloadBtn')) $id('downloadBtn').disabled = false;
+}
+
+function populateUI(){
+  if($id('totalVal')) $id('totalVal').textContent = fmt(RESULTS.total);
+  if($id('scope1Val')) $id('scope1Val').textContent = fmt(RESULTS.scopes.s1);
+  if($id('scope2Val')) $id('scope2Val').textContent = fmt(RESULTS.scopes.s2);
+  if($id('scope3Val')) $id('scope3Val').textContent = fmt(RESULTS.scopes.s3);
+
+  ensureHotspotDOM();
+
+  const hotlist = $id('hotspotListInner');
+  if(hotlist){
+    hotlist.innerHTML = RESULTS.hotspots.map((h, i) => {
+      return `<div class="hotspot-row" data-idx="${i}">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <div><strong>${h.stage}</strong><div style="font-size:12px;color:#6b7280">${h.mode || 'n/a'}</div></div>
+                  <div style="text-align:right"><div style="font-weight:700">${fmt(h.total)}</div><div style="font-size:12px;color:#6b7280">kg CO₂</div></div>
+                </div>
+              </div>`;
+    }).join('');
+    hotlist.querySelectorAll('.hotspot-row').forEach(el=>{
+      el.style.cursor='pointer';
+      el.addEventListener('click', ()=> {
+        const idx = Number(el.getAttribute('data-idx') || 0);
+        const row = RESULTS.hotspots[idx];
+        updateHotspotPanel(row);
+      });
+    });
+  }
+
+  const primary = RESULTS.hotspots[0] || null;
+  updateHotspotPanel(primary);
+
+  const stages = Object.entries(RESULTS.stageTotals).sort((a,b)=>b[1]-a[1]);
+  renderStageChart(stages.map(r=>r[0]), stages.map(r=>fmt(r[1])));
+  renderScopeChart([fmt(RESULTS.scopes.s1), fmt(RESULTS.scopes.s2), fmt(RESULTS.scopes.s3)]);
+  renderHotspotMiniChart([ fmt(primary?.transport_kg||0), fmt(primary?.manufacturing_kg||0), fmt(primary?.material_kg||0) ]);
+  renderComponentChart(primary);
+  renderSuggestions(primary);
+}
+
+function updateHotspotPanel(row){
+  const set = (id,val)=>{ const el = $id(id); if(el) el.textContent = (val===undefined||val===null) ? "—" : val; };
+
+  if(row && RESULTS.total > 0){
+    const pct = (row.total / RESULTS.total) * 100;
+    set('hsContributionPct', `${fmt(pct)}%`);
+    set('hsRowTotal', fmt(row.total));
+  } else { set('hsContributionPct', '—'); set('hsRowTotal', '—'); }
+
+  set('hsMode', row?.mode || '—');
+  set('hsStage', row?.stage || '—');
+  set('hsDistance', (row?.distance_km !== undefined) ? String(row.distance_km) : '—');
+  set('hsWeight', (row?.weight_kg !== undefined) ? String(row.weight_kg) : '—');
+  set('hsMaterial', row?.material_type || '—');
+  set('hsEnergy', row?.manufacturing_kg ? fmt(row.manufacturing_kg) : (row?.manufacturing_kg===0? '0' : '—'));
+
+  const dl = $id('hsDownloadBtn') || $id('hsDownloadBtnBackup');
+  if(dl){ dl.onclick = () => downloadHotspotCSV(row); dl.disabled = !row; }
+}
+
+function renderSuggestions(row){
+  const container = $id('hotspotSuggestionList');
+  if(!container) return;
+  container.innerHTML = '';
+  if(!row){ container.innerHTML = '<div style="color:#6b7280">No hotspot selected.</div>'; return; }
+
+  const t = row.transport_kg || 0; const m = row.material_kg || 0; const e = row.manufacturing_kg || 0; const total = row.total || 0;
+  const suggestions = [];
+  if(row.mode === 'air') suggestions.push({text:"Shift air freight to sea/rail for long legs.", est: total*0.6});
+  if(row.mode === 'truck' && row.distance_km > 500) suggestions.push({text:"Move long-distance truck legs to rail/sea or consolidate shipments.", est: total*0.3});
+  if(m > t && m > e){
+    if(row.material_type === 'plastic') suggestions.push({text:"Use recycled plastic or redesign packaging to reduce plastic mass.", est: total*0.25});
+    else suggestions.push({text:"Reduce material weight or increase recycled content.", est: total*0.2});
+  }
+  if(t > m && t > e) suggestions.push({text:"Consolidate shipments and optimise routing to cut transport emissions.", est: total*0.18});
+  if(e > Math.max(t,m)) suggestions.push({text:"Switch to renewable electricity for manufacturing to cut energy emissions.", est: total*0.4});
+  if(suggestions.length===0) suggestions.push({text:"General: optimise routing, consolidation, and material weight reduction.", est: total*0.1});
+
+  const ul = document.createElement('div'); ul.className = 'suggestion-list';
+  suggestions.forEach(s=>{
+    const rowEl = document.createElement('div'); rowEl.className = 'suggestion-item';
+    rowEl.innerHTML = `<div class="s-text">${s.text}</div><div class="s-est">est. reduction: <strong>${fmt(s.est)}</strong> kg CO₂</div>`;
+    ul.appendChild(rowEl);
+  });
+  container.appendChild(ul);
+
+  const actions = document.createElement('div'); actions.style.marginTop='8px';
+  actions.innerHTML = `<button id="hsDownloadBtn" class="btn small">Download hotspot CSV</button>`;
+  container.appendChild(actions);
+  const dl = $id('hsDownloadBtn'); if(dl) dl.onclick = () => downloadHotspotCSV(row);
+}
+
+/* Charts */
+let stageChart=null;
+function renderStageChart(labels,values){
+  const el = $id("stageChart"); if(!el) return; const ctx = el.getContext("2d");
+  if(stageChart) stageChart.destroy();
+  stageChart = new Chart(ctx, { type: "bar", data: { labels: labels, datasets: [{ data: values, backgroundColor: "#2563eb" }] }, options: { indexAxis: "y", plugins: { legend: { display: false } }, responsive:true, maintainAspectRatio:false } });
+}
+
+let scopeChart = null;
+function renderScopeChart(values){
+  const el = $id("scopeChart"); if(!el) return; const ctx = el.getContext("2d");
+  if(scopeChart) scopeChart.destroy();
+  scopeChart = new Chart(ctx, { type: "doughnut", data: { labels: ["Scope 1","Scope 2","Scope 3"], datasets: [{ data: values }] }, options: { plugins:{ legend:{ display:false } }, responsive:true, maintainAspectRatio:false } });
+}
+
+let mini = null;
+function renderHotspotMiniChart(values){
+  const el = $id("hotspotMiniChart"); if(!el) return; const ctx = el.getContext("2d");
+  if(mini) mini.destroy();
+  mini = new Chart(ctx, { type: "doughnut", data: { labels:["Transport","Manufacturing","Material"], datasets:[{ data: values }] }, options: { plugins:{ legend:{ display:false } }, responsive:true, maintainAspectRatio:false } });
+}
+
+let compChart = null;
+function renderComponentChart(row){
+  const el = $id('componentChart'); if(!el) return; const ctx = el.getContext('2d');
+  // ensure canvas has explicit pixel height to avoid growth
+  el.width = 600; el.height = 260; el.style.height = '260px';
+  const data = row ? [ row.transport_kg || 0, row.manufacturing_kg || 0, row.material_kg || 0 ] : [0,0,0];
+  if(compChart) compChart.destroy();
+  compChart = new Chart(ctx, { type: 'bar', data: { labels: ['Transport','Manufacturing','Material'], datasets: [{ data: data, backgroundColor: ['#3b82f6','#fb7185','#10b981'] }] }, options: { indexAxis: 'y', plugins:{ legend:{ display:false } }, responsive:true, maintainAspectRatio:false } });
+}
+
+/* downloads */
+function downloadHotspotCSV(row){
+  if(!row) return;
+  const headers = ['index','stage','mode','distance_km','weight_kg','transport_kg','material_kg','manufacturing_kg','total_kg'];
+  const vals = [ row.index, row.stage, row.mode, row.distance_km, row.weight_kg, fmt(row.transport_kg), fmt(row.material_kg), fmt(row.manufacturing_kg), fmt(row.total) ];
+  const csv = headers.join(',') + '\n' + vals.join(',');
+  const blob = new Blob([csv], {type:'text/csv'}); const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'hotspot_row.csv'; a.click();
+}
+
+function downloadResults(){ const data = JSON.stringify(RESULTS,null,2); const link = document.createElement("a"); link.href = URL.createObjectURL(new Blob([data],{type:"application/json"})); link.download="emissions_report.json"; link.click(); }
+
+
+// ---------- Navigation for left-side buttons (smooth scroll + active toggle) ----------
+(function initLeftNav(){
+  document.querySelectorAll('.nav-link[data-target]').forEach(btn=>{
+    btn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      // active class toggle
+      document.querySelectorAll('.nav-link').forEach(n=>n.classList.remove('active'));
+      btn.classList.add('active');
+
+      const target = btn.getAttribute('data-target');
+      if(!target) return;
+      if(target === 'top'){
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+        return;
+      }
+      const el = document.getElementById(target) || document.querySelector(`[name="${target}"]`);
+      if(el){
+        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        // small offset if header covers content
+        window.scrollBy(0, -24);
+      } else {
+        console.warn('Nav target not found:', target);
+      }
+    });
+  });
 })();

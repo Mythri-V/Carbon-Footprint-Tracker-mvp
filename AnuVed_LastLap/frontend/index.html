@@ -10,21 +10,50 @@
 
   <link rel="stylesheet" href="./styles.css" />
 </head>
+
 <body>
-  <header class="topbar">
-    <div class="container" style="max-width:1400px">
-      <div style="flex:1">
+
+  <!-- =========================
+       TOPBAR with scope cards
+       ========================= -->
+  <header class="topbar" style="padding-bottom:0;">
+    <div class="container" style="max-width:1400px; display:flex; justify-content:space-between; align-items:flex-start; gap:24px;">
+
+      <!-- LEFT: Title -->
+      <div style="flex:0 0 auto; min-width:320px;">
         <h1>Supply Chain CO₂ Dashboard</h1>
         <p class="subtitle">Upload CSV → choose industry preset → compute emissions</p>
+      </div>
+
+      <!-- RIGHT: Scope Info Cards -->
+      <div style="display:flex; gap:16px; flex:1; justify-content:flex-end; align-items:flex-start;">
+
+        <div class="scope-card">
+          <h4>Scope 1 — Direct emissions</h4>
+          <p>Owned/controlled sources (company vehicles, fuel combustion).</p>
+        </div>
+
+        <div class="scope-card">
+          <h4>Scope 2 — Indirect energy</h4>
+          <p>Purchased electricity, heating, steam.</p>
+        </div>
+
+        <div class="scope-card">
+          <h4>Scope 3 — Value chain</h4>
+          <p>Transportation, purchased goods, waste, upstream/downstream.</p>
+        </div>
+
       </div>
     </div>
   </header>
 
-  <main class="container">
+  <main class="container" style="max-width:1400px;">
+
     <!-- LEFT COLUMN -->
     <div class="left">
+
       <!-- Side navigation -->
-      <nav id="sideNav" class="side-nav" aria-label="Main navigation">
+      <nav id="sideNav" class="side-nav">
         <ul>
           <li><button class="nav-link active" data-target="top">Dashboard</button></li>
           <li><button class="nav-link" data-target="charts">Charts</button></li>
@@ -33,16 +62,18 @@
       </nav>
 
       <!-- Upload box -->
-      <div id="uploadBox" class="upload-box" role="button" tabindex="0">
+      <div id="uploadBox" class="upload-box" role="button">
         <input id="fileInput" type="file" accept=".csv" />
-        <div class="drop-hint">Drag & drop CSV here, or <button id="pickFileBtn" class="btn small">click to choose a file</button></div>
+        <div class="drop-hint">
+          Drag & drop CSV here, or <button id="pickFileBtn" class="btn small">click to choose a file</button>
+        </div>
         <div id="fileName" class="file-name">No file selected</div>
       </div>
 
       <!-- Controls -->
       <div class="controls">
         <label for="presetSelect">Industry preset</label>
-        <select id="presetSelect" aria-label="Industry preset">
+        <select id="presetSelect">
           <option value="baseline">baseline</option>
           <option value="apparel">apparel</option>
           <option value="electronics">electronics</option>
@@ -57,120 +88,126 @@
           <button id="downloadBtn" class="btn" disabled>Download results</button>
         </div>
 
-        <div class="checkbox">
-          <input id="sensitivityToggle" type="checkbox" />
-          <label for="sensitivityToggle">Compare all presets (sensitivity)</label>
-        </div>
-
         <div id="messages" class="messages">Computation status will appear here.</div>
       </div>
     </div>
 
-    <!-- RIGHT / MAIN COLUMN -->
+    <!-- RIGHT COLUMN -->
     <div class="right">
-      <!-- KPIs -->
-      <div class="metrics" id="top">
-        <div class="metric"><div class="mval" id="totalVal">-</div><div class="mlabel">Total kg CO₂</div></div>
-        <div class="metric"><div class="mval" id="scope1Val">-</div><div class="mlabel">Scope 1</div></div>
-        <div class="metric"><div class="mval" id="scope2Val">-</div><div class="mlabel">Scope 2</div></div>
-        <div class="metric"><div class="mval" id="scope3Val">-</div><div class="mlabel">Scope 3</div></div>
+
+      <!-- METRICS ROW -->
+      <div style="margin:18px 0;">
+        <div style="display:flex;gap:18px;flex-wrap:wrap;">
+
+          <div class="metric">
+            <div class="mval" id="totalVal">-</div>
+            <div class="mlabel">Total kg CO₂</div>
+          </div>
+
+          <div class="metric">
+            <div class="mval" id="scope1Val">-</div>
+            <div class="mlabel">Scope 1</div>
+          </div>
+
+          <div class="metric">
+            <div class="mval" id="scope2Val">-</div>
+            <div class="mlabel">Scope 2</div>
+          </div>
+
+          <div class="metric">
+            <div class="mval" id="scope3Val">-</div>
+            <div class="mlabel">Scope 3</div>
+          </div>
+
+        </div>
       </div>
 
-      <!-- Charts grid -->
+      <!-- CHART GRID -->
       <div class="charts-grid" id="charts">
+
+        <!-- Stage Breakdown -->
         <div class="card chart-card">
           <div class="card-header"><h3>Stage breakdown (top 10)</h3></div>
           <div class="card-body">
-            <canvas id="stageChart" aria-label="Stage breakdown" role="img"></canvas>
+            <canvas id="stageChart"></canvas>
           </div>
         </div>
 
+        <!-- Scope Breakdown -->
         <div class="card chart-card">
           <div class="card-header"><h3>Scope breakdown</h3></div>
           <div class="card-body">
-            <canvas id="scopeChart" aria-label="Scope breakdown" role="img"></canvas>
+            <canvas id="scopeChart"></canvas>
           </div>
         </div>
+
       </div>
 
-      <!-- Hotspot -->
-      <div id="hotspotContainer" class="card hotspot-card" tabindex="-1">
-        <div class="card-header" style="display:flex;align-items:center;justify-content:space-between;">
-          <h3 style="margin:0">Hotspot</h3>
-          <div style="font-size:13px;color:var(--muted)">Most intensive row in dataset</div>
+      <!-- HOTSPOT CARD -->
+      <div id="hotspotContainer" class="card hotspot-card">
+        <div class="card-header" style="display:flex;justify-content:space-between;">
+          <h3>Hotspot</h3>
+          <div style="font-size:13px;color:#6b7280">Most intensive row in dataset</div>
         </div>
 
         <div class="card-body" style="padding:12px;">
+
           <div class="hotspot-top" style="display:flex;gap:16px;align-items:flex-start;">
-            <!-- Left: donut + totals -->
-            <div class="hs-donut-wrap" style="width:220px;flex:0 0 220px;display:flex;flex-direction:column;align-items:center;gap:10px;">
-              <div id="hsContribution" class="hs-donut" role="img" aria-label="Contribution percent">
+
+            <!-- DONUT -->
+            <div class="hs-donut-wrap">
+              <div id="hsContribution" class="hs-donut">
                 <div class="hs-donut-center">
-                  <div id="hsContributionPct" style="font-weight:700;font-size:20px">—</div>
-                  <div style="font-size:12px;color:var(--muted)">of total</div>
+                  <div id="hsContributionPct">—</div>
+                  <div style="font-size:12px;color:#6b7280">of total</div>
                 </div>
               </div>
-              <div style="text-align:center">
-                <div style="font-size:13px;color:var(--muted)">Row total (kg CO₂)</div>
+              <div style="text-align:center;margin-top:8px;">
+                <div style="font-size:13px;color:#6b7280">Row total (kg CO₂)</div>
                 <div id="hsRowTotal" style="font-weight:700;font-size:18px">—</div>
               </div>
             </div>
 
-            <!-- Middle: metrics grid -->
-            <div style="flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:10px;align-items:start;">
+            <!-- METRICS -->
+            <div style="flex:1;display:grid;grid-template-columns:repeat(2,1fr);gap:10px;">
               <div class="metric"><div class="metric-label">Mode</div><div id="hsMode" class="metric-value">—</div></div>
               <div class="metric"><div class="metric-label">Stage</div><div id="hsStage" class="metric-value">—</div></div>
-
               <div class="metric"><div class="metric-label">Distance (km)</div><div id="hsDistance" class="metric-value">—</div></div>
               <div class="metric"><div class="metric-label">Weight (kg)</div><div id="hsWeight" class="metric-value">—</div></div>
-
               <div class="metric"><div class="metric-label">Material</div><div id="hsMaterial" class="metric-value">—</div></div>
               <div class="metric"><div class="metric-label">Manufacturing (kWh)</div><div id="hsEnergy" class="metric-value">—</div></div>
             </div>
 
-            <!-- Right: component chart -->
+            <!-- COMPONENT CHART -->
             <div style="flex:0 0 320px;">
-              <div style="font-weight:600;margin-bottom:8px">Component breakdown</div>
-              <canvas id="hotspotMiniChart" aria-label="Hotspot component chart" role="img"></canvas>
+              <div style="font-weight:600;margin-bottom:8px;">Component breakdown</div>
+              <canvas id="hotspotMiniChart"></canvas>
               <div id="hotspotBreakdown" style="margin-top:10px;font-size:13px;color:#374151"></div>
             </div>
+
           </div>
 
-          <!-- Suggestion + actions -->
-          <div style="display:flex;align-items:flex-start;gap:12px;margin-top:14px;">
-            <div id="hotspotSuggestion" class="hotspot-suggestion" style="flex:1">Suggestion: —</div>
-            <div style="display:flex;gap:8px;flex-direction:column;">
-              <button id="hsViewRowBtn" class="btn small">Open row details</button>
-              <button id="hsDownloadBtn" class="btn small">Download hotspot CSV</button>
-            </div>
+          <!-- Suggestion -->
+          <div style="display:flex;gap:12px;margin-top:14px;">
+            <div id="hotspotSuggestion" style="flex:1">Suggestion: —</div>
           </div>
+
         </div>
       </div>
 
-      <!-- Sensitivity / Preset comparison -->
+      <!-- Sensitivity Panel (hidden by default) -->
       <div id="sensitivityPanel" class="card sensitivity" hidden>
         <div class="card-header"><h3>Preset comparison</h3></div>
         <div id="sensitivityTable" class="card-body">No sensitivity data.</div>
       </div>
+
     </div>
   </main>
 
   <footer class="footer">Built for hackathon demo — Team AnuVed</footer>
 
-  <!-- Chart modal -->
-  <div id="chartModal" class="chart-modal" style="display:none;position:fixed;inset:0;background:rgba(10,12,15,0.45);z-index:9999;align-items:center;justify-content:center;">
-    <div style="width:90%;max-width:1200px;background:#fff;border-radius:10px;padding:16px;box-shadow:0 18px 50px rgba(2,6,23,0.4);position:relative;">
-      <button id="modalClose" style="position:absolute;right:12px;top:12px;border:none;background:#fff;padding:8px;border-radius:8px;cursor:pointer">✕</button>
-      <div style="display:flex;gap:12px;align-items:center;">
-        <h3 id="modalTitle" style="margin:0;flex:1">Chart</h3>
-        <button id="exportPNG" class="btn">Export PNG</button>
-      </div>
-      <div style="margin-top:12px;">
-        <canvas id="modalCanvas" style="width:100%;height:520px;display:block;"></canvas>
-      </div>
-    </div>
-  </div>
-
+  <!-- SCRIPT: loads your working JS -->
   <script src="./script.js"></script>
+
 </body>
 </html>
